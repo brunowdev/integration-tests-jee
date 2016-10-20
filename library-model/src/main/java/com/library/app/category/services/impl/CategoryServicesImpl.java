@@ -1,12 +1,10 @@
 package com.library.app.category.services.impl;
 
-import java.util.Iterator;
 import java.util.List;
-import java.util.Set;
 
 import javax.ejb.Stateless;
 import javax.inject.Inject;
-import javax.validation.ConstraintViolation;
+import javax.interceptor.Interceptors;
 import javax.validation.Validator;
 
 import com.library.app.category.exception.CategoryExistentException;
@@ -14,9 +12,13 @@ import com.library.app.category.exception.CategoryNotFoundException;
 import com.library.app.category.model.Category;
 import com.library.app.category.repository.CategoryRepository;
 import com.library.app.category.services.CategoryServices;
-import com.library.app.common.exception.FieldNotValidException;
+import com.library.app.common.utils.ValidationUtils;
+import com.library.app.logaudit.interceptor.Auditable;
+import com.library.app.logaudit.interceptor.LogAuditInterceptor;
+import com.library.app.logaudit.model.LogAudit.Action;
 
 @Stateless
+@Interceptors(LogAuditInterceptor.class)
 public class CategoryServicesImpl implements CategoryServices {
 
 	@Inject
@@ -26,6 +28,7 @@ public class CategoryServicesImpl implements CategoryServices {
 	CategoryRepository categoryRepository;
 
 	@Override
+	@Auditable(action = Action.ADD)
 	public Category add(final Category category) {
 		validateCategory(category);
 
@@ -33,6 +36,7 @@ public class CategoryServicesImpl implements CategoryServices {
 	}
 
 	@Override
+	@Auditable(action = Action.UPDATE)
 	public void update(final Category category) {
 		validateCategory(category);
 
@@ -58,19 +62,10 @@ public class CategoryServicesImpl implements CategoryServices {
 	}
 
 	private void validateCategory(final Category category) {
-		validateCategoryFields(category);
+		ValidationUtils.validateEntityFields(validator, category);
 
 		if (categoryRepository.alreadyExists(category)) {
 			throw new CategoryExistentException();
-		}
-	}
-
-	private void validateCategoryFields(final Category category) {
-		final Set<ConstraintViolation<Category>> errors = validator.validate(category);
-		final Iterator<ConstraintViolation<Category>> itErrors = errors.iterator();
-		if (itErrors.hasNext()) {
-			final ConstraintViolation<Category> violation = itErrors.next();
-			throw new FieldNotValidException(violation.getPropertyPath().toString(), violation.getMessage());
 		}
 	}
 

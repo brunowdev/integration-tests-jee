@@ -1,12 +1,13 @@
 package com.library.app.category.resource;
 
 import static com.library.app.commontests.category.CategoryForTestsRepository.*;
+import static com.library.app.commontests.logaudit.LogAuditTestUtils.*;
+import static com.library.app.commontests.user.UserForTestsRepository.*;
 import static com.library.app.commontests.utils.FileTestNameUtils.*;
 import static com.library.app.commontests.utils.JsonTestUtils.*;
 import static org.hamcrest.CoreMatchers.*;
 import static org.junit.Assert.*;
 
-import java.io.File;
 import java.net.URL;
 
 import javax.ws.rs.core.Response;
@@ -15,10 +16,7 @@ import org.jboss.arquillian.container.test.api.Deployment;
 import org.jboss.arquillian.container.test.api.RunAsClient;
 import org.jboss.arquillian.junit.Arquillian;
 import org.jboss.arquillian.test.api.ArquillianResource;
-import org.jboss.shrinkwrap.api.ShrinkWrap;
-import org.jboss.shrinkwrap.api.asset.EmptyAsset;
 import org.jboss.shrinkwrap.api.spec.WebArchive;
-import org.jboss.shrinkwrap.resolver.api.maven.Maven;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -28,9 +26,12 @@ import com.google.gson.JsonObject;
 import com.library.app.category.model.Category;
 import com.library.app.common.json.JsonReader;
 import com.library.app.common.model.HttpCode;
+import com.library.app.commontests.utils.ArquillianTestUtils;
 import com.library.app.commontests.utils.IntTestUtils;
 import com.library.app.commontests.utils.ResourceClient;
 import com.library.app.commontests.utils.ResourceDefinitions;
+import com.library.app.logaudit.model.LogAudit;
+import com.library.app.logaudit.model.LogAudit.Action;
 
 @RunWith(Arquillian.class)
 public class CategoryResourceIntTest {
@@ -41,18 +42,11 @@ public class CategoryResourceIntTest {
 	private ResourceClient resourceClient;
 
 	private static final String PATH_RESOURCE = ResourceDefinitions.CATEGORY.getResourceName();
+	private static final String ELEMENT_NAME = Category.class.getSimpleName();
 
 	@Deployment
 	public static WebArchive createDeployment() {
-		return ShrinkWrap
-				.create(WebArchive.class)
-				.addPackages(true, "com.library.app")
-				.addAsResource("persistence-integration.xml", "META-INF/persistence.xml")
-				.addAsWebInfResource(EmptyAsset.INSTANCE, "beans.xml")
-				.setWebXML(new File("src/test/resources/web.xml"))
-				.addAsLibraries(
-						Maven.resolver().resolve("com.google.code.gson:gson:2.3.1", "org.mockito:mockito-core:1.9.5")
-								.withTransitivity().asFile());
+		return ArquillianTestUtils.createDeploymentArchive();
 	}
 
 	@Before
@@ -60,6 +54,8 @@ public class CategoryResourceIntTest {
 		this.resourceClient = new ResourceClient(url);
 
 		resourceClient.resourcePath("/DB").delete();
+		resourceClient.resourcePath("DB/" + ResourceDefinitions.USER.getResourceName()).postWithContent("");
+		resourceClient.user(admin());
 	}
 
 	@Test
@@ -67,6 +63,8 @@ public class CategoryResourceIntTest {
 	public void addValidCategoryAndFindIt() {
 		final Long id = addCategoryAndGetId("category.json");
 		findCategoryAndAssertResponseWithCategory(id, java());
+
+		assertAuditLogs(resourceClient, 1, new LogAudit(admin(), Action.ADD, ELEMENT_NAME));
 	}
 
 	@Test
@@ -77,6 +75,8 @@ public class CategoryResourceIntTest {
 
 		assertThat(response.getStatus(), is(equalTo(HttpCode.VALIDATION_ERROR.getCode())));
 		assertJsonResponseWithFile(response, "categoryErrorNullName.json");
+
+		assertAuditLogs(resourceClient, 0);
 	}
 
 	@Test
@@ -88,6 +88,8 @@ public class CategoryResourceIntTest {
 				getPathFileRequest(PATH_RESOURCE, "category.json"));
 		assertThat(response.getStatus(), is(equalTo(HttpCode.VALIDATION_ERROR.getCode())));
 		assertJsonResponseWithFile(response, "categoryAlreadyExists.json");
+
+		assertAuditLogs(resourceClient, 1, new LogAudit(admin(), Action.ADD, ELEMENT_NAME));
 	}
 
 	@Test
@@ -101,6 +103,9 @@ public class CategoryResourceIntTest {
 		assertThat(response.getStatus(), is(equalTo(HttpCode.OK.getCode())));
 
 		findCategoryAndAssertResponseWithCategory(id, cleanCode());
+
+		assertAuditLogs(resourceClient, 2, new LogAudit(admin(), Action.ADD, ELEMENT_NAME), new LogAudit(admin(),
+				Action.UPDATE, ELEMENT_NAME));
 	}
 
 	@Test
@@ -113,6 +118,9 @@ public class CategoryResourceIntTest {
 				getPathFileRequest(PATH_RESOURCE, "categoryCleanCode.json"));
 		assertThat(response.getStatus(), is(equalTo(HttpCode.VALIDATION_ERROR.getCode())));
 		assertJsonResponseWithFile(response, "categoryAlreadyExists.json");
+
+		assertAuditLogs(resourceClient, 2, new LogAudit(admin(), Action.ADD, ELEMENT_NAME), new LogAudit(admin(),
+				Action.ADD, ELEMENT_NAME));
 	}
 
 	@Test
@@ -121,6 +129,8 @@ public class CategoryResourceIntTest {
 		final Response response = resourceClient.resourcePath(PATH_RESOURCE + "/999").putWithFile(
 				getPathFileRequest(PATH_RESOURCE, "category.json"));
 		assertThat(response.getStatus(), is(equalTo(HttpCode.NOT_FOUND.getCode())));
+
+		assertAuditLogs(resourceClient, 0);
 	}
 
 	@Test
@@ -128,6 +138,8 @@ public class CategoryResourceIntTest {
 	public void findCategoryNotFound() {
 		final Response response = resourceClient.resourcePath(PATH_RESOURCE + "/999").get();
 		assertThat(response.getStatus(), is(equalTo(HttpCode.NOT_FOUND.getCode())));
+
+		assertAuditLogs(resourceClient, 0);
 	}
 
 	@Test
@@ -140,15 +152,37 @@ public class CategoryResourceIntTest {
 		assertResponseContainsTheCategories(response, 4, architecture(), cleanCode(), java(), networks());
 	}
 
+	@Test
+	@RunAsClient
+	public void findAllCategoriesWithNoUser() {
+		final Response response = resourceClient.user(null).resourcePath(PATH_RESOURCE).get();
+		assertThat(response.getStatus(), is(equalTo(HttpCode.UNAUTHORIZED.getCode())));
+
+		assertAuditLogs(resourceClient, 0);
+	}
+
+	@Test
+	@RunAsClient
+	public void findAllCategoriesWithUserCustomer() {
+		final Response response = resourceClient.user(johnDoe()).resourcePath(PATH_RESOURCE).get();
+		assertThat(response.getStatus(), is(equalTo(HttpCode.OK.getCode())));
+
+		assertAuditLogs(resourceClient, 0);
+	}
+
+	@Test
+	@RunAsClient
+	public void findCategoryByIdWithUserCustomer() {
+		final Response response = resourceClient.user(johnDoe()).resourcePath(PATH_RESOURCE + "/999").get();
+		assertThat(response.getStatus(), is(equalTo(HttpCode.FORBIDDEN.getCode())));
+
+		assertAuditLogs(resourceClient, 0);
+	}
+
 	private void assertResponseContainsTheCategories(final Response response, final int expectedTotalRecords,
 			final Category... expectedCategories) {
-		final JsonObject result = JsonReader.readAsJsonObject(response.readEntity(String.class));
-
-		final int totalRecords = result.getAsJsonObject("paging").get("totalRecords").getAsInt();
-		assertThat(totalRecords, is(equalTo(expectedTotalRecords)));
-
-		final JsonArray categoriesList = result.getAsJsonArray("entries");
-		assertThat(categoriesList.size(), is(equalTo(expectedCategories.length)));
+		final JsonArray categoriesList = IntTestUtils.assertJsonHasTheNumberOfElementsAndReturnTheEntries(response,
+				expectedTotalRecords, expectedCategories.length);
 
 		for (int i = 0; i < expectedCategories.length; i++) {
 			final Category expectedCategory = expectedCategories[i];
